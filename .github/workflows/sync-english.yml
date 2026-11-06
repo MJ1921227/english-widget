@@ -1,0 +1,38 @@
+name: Sync daily English phrase
+on:
+  schedule:
+    - cron: '10 15 * * *' # 00:10 KST daily
+  workflow_dispatch:
+permissions:
+  contents: write
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Fetch published phrase from Google Apps Script
+        env:
+          PHRASE_URL: https://script.google.com/macros/s/AKfycbzMF0Q0jellV1pWMDCzR_1wsWr5O8spD-CAkef4_kwpoDgEWfuCzRoJL3px50EiavQKjQ/exec?field=phrase
+        run: |
+          python3 - <<'PY'
+          import os, urllib.request
+          req = urllib.request.Request(os.environ['PHRASE_URL'], headers={'User-Agent':'EnglishWidgetSync/1.0'})
+          with urllib.request.urlopen(req, timeout=35) as response:
+              phrase = response.read().decode('utf-8-sig').strip()
+          if not phrase or len(phrase)>500 or '<html' in phrase.lower() or '<!doctype' in phrase.lower():
+              raise ValueError('Invalid phrase response; keeping existing file')
+          with open('today.txt', 'w', encoding='utf-8') as f:
+              f.write(phrase+'\n')
+          print('Fetched phrase:',phrase)
+          PY
+      - name: Commit only when phrase changed
+        run: |
+          if git diff --quiet -- today.txt; then
+            echo "No phrase change"
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add today.txt
+          git commit -m "Sync daily English phrase"
+          git push
