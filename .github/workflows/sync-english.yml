@@ -3,6 +3,9 @@ on:
   schedule:
     - cron: '10 15 * * *' # 00:10 KST every day
   workflow_dispatch:
+  push:
+    paths:
+      - '.github/workflows/sync-english.yml'
 permissions:
   contents: write
 concurrency:
@@ -18,7 +21,7 @@ jobs:
           BASE_URL: https://script.google.com/macros/s/AKfycbzMF0Q0jellV1pWMDCzR_1wsWr5O8spD-CAkef4_kwpoDgEWfuCzRoJL3px50EiavQKjQ/exec
         run: |
           python3 - <<'PY'
-          import os, urllib.request, urllib.parse
+          import os, urllib.request, urllib.parse, traceback
           fields = {
               "phrase": "today.txt",
               "meaning": "meaning.txt",
@@ -26,31 +29,39 @@ jobs:
               "translation": "translation.txt",
           }
           values = {}
-          for field, filename in fields.items():
-              url = os.environ["BASE_URL"] + "?" + urllib.parse.urlencode({"field": field})
-              req = urllib.request.Request(url, headers={"User-Agent": "EnglishWidgetSync/1.0"})
-              with urllib.request.urlopen(req, timeout=40) as response:
-                  value = response.read().decode("utf-8-sig").strip()
-                  status = response.status
-              value = " ".join(value.split())
-              if not value or len(value) > 1500 or "<html" in value.lower() or "<!doctype" in value.lower() or "\n" in value:
-                  raise ValueError(f"Invalid response for {field}: HTTP {status}, length={len(value)}, preview={value[:160]!r}; no files updated")
-              values[filename] = value
-          if len(set(values.values())) < 4:
-              raise ValueError("Fields are not distinct; check Apps Script field support")
-          for filename, value in values.items():
-              with open(filename, "w", encoding="utf-8") as output:
-                  output.write(value + "\n")
-          print("Validated all four fields")
+          try:
+            for field, filename in fields.items():
+                url = os.environ["BASE_URL"] + "?" + urllib.parse.urlencode({"field": field})
+                req = urllib.request.Request(url, headers={"User-Agent": "EnglishWidgetSync/1.0"})
+                with urllib.request.urlopen(req, timeout=40) as response:
+                    value = response.read().decode("utf-8-sig").strip()
+                    status = response.status
+                value = " ".join(value.split())
+                if not value or len(value) > 1500 or "<html" in value.lower() or "<!doctype" in value.lower() or "\n" in value:
+                    raise ValueError(f"Invalid response for {field}: HTTP {status}, length={len(value)}, preview={value[:160]!r}; no files updated")
+                values[filename] = value
+            if len(set(values.values())) < 4:
+                raise ValueError("Fields are not distinct; check Apps Script field support")
+            for filename, value in values.items():
+                with open(filename, "w", encoding="utf-8") as output:
+                    output.write(value + "\n")
+            print("Validated all four fields")
+          except Exception as exc:
+            with open('sync-diagnostic.txt', 'w', encoding='utf-8') as out:
+              out.write(type(exc).__name__ + ': ' + str(exc)[:400] + '\n')
+            traceback.print_exc()
+            raise
           PY
-      - name: Commit all changed fields together
+      - name: Commit sync data or diagnostic
+        if: always()
         run: |
-          if git diff --quiet -- today.txt meaning.txt example.txt translation.txt; then
+          if git diff --quiet -- today.txt meaning.txt example.txt translation.txt sync-diagnostic.txt && [ ! -f sync-diagnostic.txt ]; then
             echo "No changes"
             exit 0
           fi
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add today.txt meaning.txt example.txt translation.txt
+          if [ -f sync-diagnostic.txt ]; then git add sync-diagnostic.txt; fi
           git commit -m "Sync daily English widget fields"
           git push
